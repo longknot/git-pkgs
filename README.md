@@ -62,7 +62,7 @@ By using the *max* strategy we should adhere to the *import compatibity rule*, w
 This does not necessarily mean that we use the *latest* version of a package. We will not upgrade to a newer version unless it is already required by one of the packages.
 
 ### Worktrees
-When a package is added through `git pkgs add`, you will need to specify three arguments. An example:
+When a package is added through `git pkgs add`, you will need to specify three arguments. Example:
 ```bash
 git pkgs add pkgs/author/repo https://github.com/author/repo 1.0
 ```
