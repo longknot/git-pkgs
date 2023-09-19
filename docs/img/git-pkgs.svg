@@ -1,0 +1,35 @@
+<svg viewBox="-1.5 -1.5 3 3" width="200" height="200" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink">
+	<defs>
+    <style type="text/css">
+      path {
+        fill: none;
+        stroke: white;
+        stroke-width: 0.1;
+        marker: url(#dot);
+      }
+    </style>
+		<marker id="dot" class="d1" style="overflow:visible">
+			<circle r="1.25" fill="white" />
+	  </marker>
+	  <g id="diamond" transform="rotate(45)">
+	  	<rect id="r2" x="-0.5" y="-0.5" height="1" width="1" rx="0.17" />
+  	</g>
+	</defs>
+
+  <g transform="translate(0 -0.75)">
+    <use xlink:href="#diamond" fill="#693" />
+    <path d="M 0 0.3 L 0.3 0 L 0 -0.3 L 0 0.9" />
+  </g>
+  <g transform="translate(0 0.75)">
+    <use xlink:href="#diamond" fill="#936" />
+    <path d="M 0 -0.3 L -0.3 0 L 0.3 0 L 0 0.3" />
+  </g>
+  <g transform="translate(0.75 0)">
+    <use xlink:href="#diamond" fill="#369" />
+    <path d="M 0 0.3 L -0.3 0 L 0 -0.3 L 0 0.75 L -0.375 0.375" />
+  </g>
+  <g transform="translate(-0.75 0)">
+    <use xlink:href="#diamond" fill="#396" />
+    <path d="M 0 0 L 0.375 -0.375 M 0 -0.6 L 0 0.6 M 0 0 L 0.375 0.375" />
+  </g>
+</svg>
