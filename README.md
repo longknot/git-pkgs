@@ -48,7 +48,7 @@ A release is associated with a git tag (typically a *semantic version*). The rel
 Dependencies are added to a release by fetching from remote repositories. Once they are added they will be committed as orphans (i.e. a single commit without a parent). Information of their source repository is maintained through their a log entry. Dependencies can be either *direct* or *transitive* (i.e. indirect).
 
 ### Conflicts
-Let us consider the case where direct dependencies, e.g. `a` and `b`, require the same *transitive* dependency `c`. If a requires `c@1.0` and `b` requires `c@1.1` then this needs to be resolved.  Now let's also assume that we can only add dependencies one at a time (this is the effective mechanism of `git-pkgs add`).
+Let us consider the case where direct dependencies, e.g. `a` and `b`, require the same *transitive* dependency `c`. If `a` requires `c@1.0` and `b` requires `c@1.1` then this needs to be resolved.  Now let's also assume that we can only add dependencies one at a time (this is the effective mechanism of `git-pkgs add`).
 
 If `a` was added before `b`, it means that we have already added the transitive dependency `c@1.0`.
 When `b` is then added we have the following conflict resolution strategies:
