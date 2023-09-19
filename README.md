@@ -113,7 +113,7 @@ git pkgs release <revision>
 ```
 
 ### Check out a specific release
-Checking out a release revision will restore all the dependencies into the state release in which they were recorded. We can think of this as a way to roll back dependencies to an earlier state.
+Checking out a release revision will restore all the dependencies into the state of the release in which they were recorded. We can think of this as a way to roll back dependencies to an earlier state.
 ```bash
 git pkgs checkout <revision>
 ```
