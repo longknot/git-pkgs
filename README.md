@@ -52,9 +52,9 @@ Let us consider the case where direct dependencies, e.g. `a` and `b`, require th
 
 If `a` was added before `b`, it means that we have already added the transitive dependency `c@1.0`.
 When `b` is then added we have the following conflict resolution strategies:
-- **max** &mdash;  (default strategy) always choose the maximum version (in this case we will update from `c@1.0`to `c$1.1` when `b` is added).
+- **max** &mdash;  (default strategy) always choose the maximum version (in this case we will update from `c@1.0`to `c@1.1` when `b` is added).
 - **keep** &mdash; we always keep the existing dependency (i.e. `c@1.0`).
-- **update** &mdash; always update (when `b` is added it will update to `c$1.1`).
+- **update** &mdash; always update (when `b` is added it will update to `c@1.1`).
 - **interactive** &mdash; interactive prompt where each conflict will be resolved manually.
 
 By using the *max* strategy we should adhere to the *import compatibity rule*, which states that packages in newer versions shoud work as well as older ones (i.e. we assume that backward compatibility is maintained).
@@ -67,7 +67,7 @@ When a package is added through `git pkgs add`, you will need to specify three a
 git pkgs add pkgs/author/repo https://github.com/author/repo 1.0
 ```
 The first argument (`pkgs/author/repo`) has a two-folded meaning:
-1. It indicates a unique name of the added package that must be maintained when it is required by multiple packages (it will be recorded as part of the dependency and it can not be changed once it has is already added).
+1. It indicates a unique name of the added package that must be maintained when it is required by multiple packages (it will be recorded as part of the dependency and it can not be changed once it is already added).
 2. It indicates the *prefix path* within the *working directory* that will be checked out using *git worktree*. Typically you want all packages to be located within a specific folder, e.g. `pkgs`, `bundles`, `modules` (or similar) and this should be a fixed convention across your package eco-system so that no two packages include another package using a different convention.
 
 One way to achieve this is to have a common package prefix and to build a suffix from the url parts of the repository url.
