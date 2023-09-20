@@ -1,7 +1,7 @@
 #!/bin/bash
 
 clean_up() {
-  rm -R -- foo/ bar/ origin/ pkgs/
+  rm -R -- foo/ bar/ origin/ pkgs/ 2> /dev/null
 }
 
 log_msg() {
@@ -86,6 +86,7 @@ basic_test() {
   # Release foo@1.2
   pkg_add foo pkgs/a 1.2
   pkg_add foo pkgs/e 1.2
+
   pkg_release foo 1.2
   git -C foo pkgs tree
 

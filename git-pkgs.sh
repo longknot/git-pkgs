@@ -82,13 +82,14 @@ is_non_transitive() {
 
 # Make branch an orphan.
 orphanize() {
-	commit=`git rev-parse refs/releases/HEAD/$name`
+	commit=`git rev-parse refs/pkgs/$name/$revision/$name`
 	worktree_reset $name
 
 	# remove existing branch.
 	git branch -q -D $name 2> /dev/null
 
-	git worktree add -q $name "refs/releases/HEAD/$name"
+	#git worktree add -q $name "refs/releases/HEAD/$name"
+	git worktree add -q --no-checkout $name "refs/pkgs/$name/$revision/$name"
 	git -C "$name" checkout -q -f --orphan "$name"
 	git -C "$name" commit -C $commit -q \
 		--trailer "git-pkgs-name:$name" \
@@ -96,8 +97,7 @@ orphanize() {
 		--trailer "git-pkgs-revision:$revision" \
 		--trailer "git-pkgs-url:$url"
 
-	# update refs/releases/head/[package] to point to the new orphanized branch.
-	git fetch -q . "refs/heads/$name:refs/releases/HEAD/$name" --no-tags --force
+	# update refs/pkgs/$name/$revision/$name to point to the new orphanized branch.
 	git fetch -q . "refs/heads/$name:refs/pkgs/$name/$revision/$name" --no-tags --force
 }
 
@@ -169,16 +169,18 @@ cmd_add() {
 		url=`git -C $name -P log -n 1 --pretty='%(trailers:key=git-pkgs-url,valueonly)%-'`
 	fi
 
-	# N: this will be rejected (non-fast forward) unless using --force.
-	git fetch -f --depth=1 --no-tags $url \
-		"$revision:refs/releases/HEAD/$name" || die
-
 	# N: adding "--depth=1" will add the orphan branch to .git/shallow,
 	# even if the remote branch is already an orphan of depth 1.
   git fetch -f --no-tags $url	\
 		"refs/releases/$revision/*:refs/pkgs/$name/$revision/*"
 
-	# make shallow branch an orphan.
+	# N: the target ref (i.e. the package itself), may already exist, if there is
+	# a cyclic dependency. We assume that the specified revision will void this
+	# dependency, since a cyclic dependency can only require an earlier revision.
+	git fetch -f --depth=1 --no-tags $url \
+		"$revision:refs/pkgs/$name/$revision/$name" || die
+
+	# Make shallow branch an orphan.
 	orphanize
 
 	echo "From $url"
@@ -348,13 +350,6 @@ cmd_tree() {
 cmd_prune() {
 	git reflog expire --expire-unreachable=all --all
 	git gc --prune=now
-}
-
-pkg_add_transitive() {
-	git ls-remote . "refs/pkgs/$parent_pkg/$parent_rev/$pkg" |
-		while read commit ref; do
-			echo $ref
-		done
 }
 
 # Resolve removed into existing.
