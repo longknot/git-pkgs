@@ -82,23 +82,22 @@ is_non_transitive() {
 
 # Make branch an orphan.
 orphanize() {
-	commit=`git rev-parse refs/pkgs/$name/$revision/$name`
+	src="refs/pkgs/$name/$revision/$name"
+	commit=`git rev-parse $src`
 	worktree_reset $name
 
-	# remove existing branch.
-	git branch -q -D $name 2> /dev/null
+	git worktree add -q --no-checkout $name $src
 
-	#git worktree add -q $name "refs/releases/HEAD/$name"
-	git worktree add -q --no-checkout $name "refs/pkgs/$name/$revision/$name"
 	git -C "$name" checkout -q -f --orphan "$name"
-	git -C "$name" commit -C $commit -q \
+	git -C "$name" commit -C $src -q \
 		--trailer "git-pkgs-name:$name" \
 		--trailer "git-pkgs-commit:$commit" \
 		--trailer "git-pkgs-revision:$revision" \
 		--trailer "git-pkgs-url:$url"
 
-	# update refs/pkgs/$name/$revision/$name to point to the new orphanized branch.
-	git fetch -q . "refs/heads/$name:refs/pkgs/$name/$revision/$name" --no-tags --force
+	git update-ref -d $src
+	git fetch -q . "refs/heads/$name:$src" --no-tags --force
+	git update-ref -d "refs/heads/$name"
 }
 
 add_package() {
@@ -118,9 +117,14 @@ add_package() {
 }
 
 resolve_transitive_dependency() {
+	a=$1
+	b=$2
+	target=$3
+
 	pkg=${target#"refs/releases/HEAD/"}
 
 	incoming=`git name-rev --name-only $b`
+	rev_a=""
 	rev_b=`get_trailer $b git-pkgs-revision`
 
 	if git rev-parse -q --verify "$a^{commit}" > /dev/null; then
@@ -190,8 +194,8 @@ cmd_add() {
 	echo "Depencies resolved:"
 	git fetch . "refs/pkgs/$name/$revision/*:refs/releases/HEAD/*" --no-tags --porcelain | \
 		while read status a b target; do
-			resolve_transitive_dependency
-	  done
+			resolve_transitive_dependency $a $b $target
+		done
 }
 
 # Create a new release (tag) of this package.
@@ -362,10 +366,9 @@ resolve_removed() {
 			root=`get_trailer $sha git-pkgs-name`
 			revision=`get_trailer $sha git-pkgs-revision`
 			git ls-remote . "refs/pkgs/$root/$revision/$removed" |
-				while read commit ref; do
-					a=`git rev-parse $target 2> /dev/null`
-					b=$commit
-					resolve_transitive_dependency
+				while read new ref; do
+					old=`git rev-parse $target 2> /dev/null`
+					resolve_transitive_dependency $old $new $target
 				done
 		done
 }
