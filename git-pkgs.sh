@@ -350,10 +350,7 @@ release_tree() {
 }
 
 cmd_tree() {
-	release="$1"
-	if [ -z $release ]; then
-		release=HEAD
-	fi
+	release=${1:-HEAD}
 	release_tree $release  | format_tree
 }
 
@@ -406,10 +403,7 @@ cmd_remove() {
 	fi
 }
 
-# All commands but "clone" requires a work tree.
-if [[ $command != "clone" ]]; then
-	. git-sh-setup
-	require_work_tree
-fi
+# All commands but "clone" require a work tree.
+[[ $command != "clone" ]] && . git-sh-setup && require_work_tree
 
 "cmd_$command" "$@"
