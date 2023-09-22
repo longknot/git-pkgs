@@ -69,15 +69,24 @@ worktree_reset() {
 worktree_checkout() {
 	if [ -d $pkg ];
 	then
-		git -C $pkg checkout -q $ref
+		git -C $pkg checkout -q "refs/releases/HEAD/$pkg"
 	else
-		git worktree add -q -f $pkg $ref
+		git worktree add -q -f $pkg "refs/releases/HEAD/$pkg"
 	fi
 }
 
 # Hackish, but it works.
 is_non_transitive() {
 	git name-rev --no-undefined --refs="refs/pkgs/$1/*/$1" "refs/releases/HEAD/$1" &> /dev/null
+}
+
+# Extract trailers for 'git for-each-ref'.
+trailers() {
+	printf "%%(contents:trailers:"
+	for key in $@; do
+		printf "key=$key,"
+	done
+	printf "valueonly,separator= )"
 }
 
 # Make branch an orphan.
@@ -170,7 +179,7 @@ cmd_add() {
   	read -r name url revision <<< "$@"
 	elif [ "$#" -eq 2 ]; then
 		read -r name revision <<< "$@"
-		url=`git -C $name -P log -n 1 --pretty='%(trailers:key=git-pkgs-url,valueonly)%-'`
+		url=$(get_trailer "refs/releases/HEAD/$name" git-pkgs-url)
 	fi
 
 	# N: adding "--depth=1" will add the orphan branch to .git/shallow,
@@ -202,8 +211,7 @@ cmd_add() {
 cmd_release() {
 	revision=$1
 	git add .
-	git commit -q --message="$message" \
-		--trailer "git-pkgs-release:$revision"
+	git commit -q --message="$message" --trailer "git-pkgs-release:$revision"
 	git tag $revision
 	git fetch -q . "refs/releases/HEAD/*:refs/releases/$revision/*"
 }
@@ -214,33 +222,32 @@ cmd_checkout() {
 	echo "Checkout revision $revision."
 	git checkout -q $revision
 	# N: rejected non-fast-forward.
-	git ls-remote . "refs/releases/HEAD/*" |
-		while read commit ref; do
+	git for-each-ref "refs/releases/HEAD"	--format="%(refname)" |
+		while read ref; do
 			pkg=${ref#"refs/releases/HEAD/"}
 			worktree_reset $pkg
+			git update-ref -d $ref
 		done
 
 	git fetch -q -p -f . "refs/releases/$revision/*:refs/releases/HEAD/*"
-	git ls-remote . "refs/releases/HEAD/*" |
-		while read commit ref; do
+
+	git for-each-ref "refs/releases/HEAD"	--format="%(refname)" |
+		while read ref; do
 			pkg=${ref#"refs/releases/HEAD/"}
-			worktree_checkout
+			worktree_checkout $pkg
 		done
 }
 
 # List all (remote) release tags of a package.
 cmd_ls-releases() {
-	package=$1
-	url=`git -C $package -P log -n 1 --pretty='%(trailers:key=git-pkgs-url,valueonly)%-'`
+	url=$(get_trailer "refs/releases/HEAD/$1" git-pkgs-url)
 	git ls-remote --refs --tags $url
 }
 
 # Get status (commit/revision) of all packages.
 cmd_status() {
-	git ls-remote . 'refs/releases/HEAD/*' |
-		while read commit pkg; do
-			git -P log -n 1 $commit --pretty="$commit     %(trailers:key=git-pkgs-name,valueonly)%-@%(trailers:key=git-pkgs-revision,valueonly)%-"
-		done
+	fmt="%(objectname)    %(contents:trailers:key=git-pkgs-name,key=git-pkgs-revision,valueonly,separator=@)"
+	git for-each-ref --format="$fmt" 'refs/releases/HEAD'
 }
 
 # Push release and dependent packages to a remote.
@@ -315,8 +322,8 @@ package_tree() {
   		echo -e "$1:\e[32m$pkg \e[36m$revision\e[0m"
   	fi
 
-  	git ls-remote . "refs/pkgs/$pkg/$revision/*" |
-  		while read commit ref; do
+		git for-each-ref "refs/pkgs/$pkg/$revision" |
+  		while read commit type ref; do
   			package_tree "$1:$pkg@$revision" $release
   		done
   fi
@@ -325,8 +332,8 @@ package_tree() {
 # List packages that were added by "git pkgs add".
 get_root_packages() {
 	revision=$1
-	git ls-remote . "refs/releases/$revision/pkgs/*" |
-		while read commit ref; do
+	git for-each-ref "refs/releases/$revision/pkgs" |
+		while read commit type ref; do
 			pkg=${ref#"refs/releases/$revision/"}
 			if is_non_transitive $pkg; then
 				echo $commit
@@ -365,8 +372,8 @@ resolve_removed() {
 		while read sha; do
 			root=`get_trailer $sha git-pkgs-name`
 			revision=`get_trailer $sha git-pkgs-revision`
-			git ls-remote . "refs/pkgs/$root/$revision/$removed" |
-				while read new ref; do
+			git for-each-ref "refs/pkgs/$root/$revision/$removed" |
+				while read new type ref; do
 					old=`git rev-parse $target 2> /dev/null`
 					resolve_transitive_dependency $old $new $target
 				done
@@ -383,8 +390,8 @@ cmd_remove() {
 		echo "Removing $name@$revision"
 		echo "Depencies resolved:"
 		# Process transitory dependencies
-		git ls-remote . "refs/pkgs/$name/$revision/*" |
-			while read commit ref; do
+		git for-each-ref "refs/pkgs/$name/$revision" |
+			while read commit type ref; do
 				pkg=${ref#"refs/pkgs/$name/$revision/"}
 				pkg_rev=`get_trailer $commit git-pkgs-revision`
 
