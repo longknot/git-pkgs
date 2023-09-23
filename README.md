@@ -141,11 +141,11 @@ git pkgs tree [revision]
 ### Json export
 Export dependencies to json file format. Optionally specify which revision to export.
 ```bash
-git pkgs export [revision]
+git pkgs json-export [revision]
 ```
 
 ### Json import
 Import from json. All packages are added from their source repository using `git pkgs add`.
 ```bash
-git pkgs import [filename]
+git pkgs json-import [filename]
 ```
