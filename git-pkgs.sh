@@ -18,17 +18,21 @@ git pkgs clone <remote>
 git pkgs ls-releases <pkg>
 git pkgs status [revision]
 git pkgs tree [revision]
+git pkgs json-import [filename]
+git pkgs json-export [revision]
 --
 h,help        show the help
 q             quiet
+P,prefix      prefix
 m,message=    commit message
-s,strategy=   conflict resolution strategy ('max', 'keep', 'update', 'interactive')
+s,strategy=   conflict resolution strategy ('max', 'min', 'keep', 'update', 'interactive')
 "
 
 eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
 
-strategy=max
+prefix=$(git config --get pkgs.prefix)
 message=
+strategy=$(git config --default "max" --get pkgs.strategy)
 
 while [ $# -gt 0 ]; do
 	opt="$1"
@@ -50,6 +54,14 @@ read_char() {
   stty -icanon -echo
   REPLY=$(dd bs=1 count=1 2>/dev/null)
   stty icanon echo
+}
+
+min_revision() {
+	printf "%s\n" $@ | sort -V | head -1
+}
+
+max_revision() {
+	printf "%s\n" $@ | sort -Vr | head -1
 }
 
 get_trailer() {
@@ -100,8 +112,8 @@ orphanize() {
 	git -C "$name" checkout -q -f --orphan "$name"
 	git -C "$name" commit -C $src -q \
 		--trailer "git-pkgs-name:$name" \
-		--trailer "git-pkgs-commit:$commit" \
 		--trailer "git-pkgs-revision:$revision" \
+		--trailer "git-pkgs-commit:$commit" \
 		--trailer "git-pkgs-url:$url"
 
 	git update-ref -d $src
@@ -143,11 +155,10 @@ resolve_transitive_dependency() {
 		rev=$rev_a
 		case $strategy in
 			max)
-				max=`printf "$rev_a\n$rev_b" | sort -V | tail -1`
-				if [[ $max == $rev_b ]]
-				then
-					rev=$rev_b
-				fi
+				rev=`max_revision $rev_a $rev_b`
+			;;
+			min)
+				rev=`min_revision $rev_a $rev_b`
 			;;
 			keep)
 				rev=$rev_a
@@ -351,7 +362,7 @@ release_tree() {
 
 cmd_tree() {
 	release=${1:-HEAD}
-	release_tree $release  | format_tree
+	release_tree $release | format_tree
 }
 
 # Prune unreachable grafted commits.
@@ -401,6 +412,36 @@ cmd_remove() {
 				fi
 			done
 	fi
+}
+
+# Import from json (requires jq).
+cmd_json-import() {
+	filename=$1
+	jq -r '.packages[] | "\(.name) \(.revision) \(.url)"' $filename |
+		while read name revision url; do
+			git pkgs add $name $url $revision
+		done
+}
+
+# Export to json-format.
+cmd_json-export() {
+
+	printf_json() {
+		output=`printf $@`; echo ${output/%,}
+	}
+	list_packages() {
+		git for-each-ref "refs/releases/$revision" \
+			--format="$(trailers git-pkgs-name git-pkgs-revision git-pkgs-commit git-pkgs-url)" |
+			while read name revision commit url; do
+				if is_non_transitive $name; then
+					printf_json "\"%s\":\"%s\"," name $name revision $revision commit $commit url $url
+				fi
+			done
+	}
+
+	revision=${1:-HEAD}
+	packages=$(printf_json "{%s}," $(list_packages))
+	echo "{\"packages\":[$packages]}"
 }
 
 # All commands but "clone" require a work tree.
