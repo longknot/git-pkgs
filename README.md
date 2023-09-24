@@ -156,3 +156,6 @@ Import from json. All packages are added from their source repository using `git
 ```bash
 git pkgs json-import [<filename>]
 ```
+
+## Acknowledgements
+Thanks to ChatGPT for providing valuable feedback. While not involved in the design per se, I very much appreciate some of the terminology used to describe this idea of mine (e.g. "decentralized dependency management").
