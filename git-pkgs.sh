@@ -10,22 +10,23 @@ fi
 
 OPTS_SPEC="\
 git pkgs release [-m <message>] <revision>
-git pkgs add [-s <strategy>] <pkg> <remote> <revision>
+git pkgs add [-s <strategy>] <pkg> <revision> [<remote>]
 git pkgs remove <pkg>
 git pkgs checkout <revision>
-git pkgs push <remote> <revision>
-git pkgs clone <remote>
+git pkgs push <remote> [<revision>]
+git pkgs clone <remote> [<directory>]
 git pkgs ls-releases <pkg>
-git pkgs status [revision]
-git pkgs tree [revision]
-git pkgs json-import [filename]
-git pkgs json-export [revision]
+git pkgs status [<revision>]
+git pkgs tree [<revision>]
+git pkgs json-import [<filename>]
+git pkgs json-export [--all] [<revision>]
 --
 h,help        show the help
 q             quiet
-P,prefix      prefix
+P,prefix=     prefix
 m,message=    commit message
 s,strategy=   conflict resolution strategy ('max', 'min', 'keep', 'update', 'interactive')
+all           include all dependencies in an export (both direct and transitive).
 "
 
 eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
@@ -33,14 +34,17 @@ eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
 prefix=$(git config --get pkgs.prefix)
 message=
 strategy=$(git config --default "max" --get pkgs.strategy)
+all=
 
 while [ $# -gt 0 ]; do
 	opt="$1"
 	shift
 	case "$opt" in
 		-q) quiet=1 ;;
+		-P) prefix="$1"; shift;;
 		-m) message="$1"; shift;;
 		-s) strategy="$1"; shift;;
+		--all) all=1 ;;
 		--) break ;;
 		*) die "Unexpected option: $opt" ;;
 	esac
@@ -56,34 +60,46 @@ read_char() {
   stty icanon echo
 }
 
+sort_revisions() {
+	printf "%s\n" $@ | sort -V
+}
+
 min_revision() {
-	printf "%s\n" $@ | sort -V | head -1
+	sort_revisions $@ | head -1
 }
 
 max_revision() {
-	printf "%s\n" $@ | sort -Vr | head -1
+	sort_revisions $@ | tail -1
 }
 
 get_trailer() {
 	git -P show -s --pretty="%(trailers:key=$2,valueonly)%-" $1
 }
 
+pkg_path() {
+	path=$1
+	[ ! -z $prefix ] && path=$prefix/$path
+	echo $path
+}
+
 worktree_reset() {
 	# remove worktree if it already exists.
-	if [ -d "$1" ]
+	path=$(pkg_path $1)
+	if [ -d "$path" ]
 	then
-    git worktree remove -f "$1"
+    git worktree remove -f "$path"
 		git worktree prune
 	fi
 }
 
 # If pkg exists, use "git checkout", otherwise "git worktree add".
 worktree_checkout() {
-	if [ -d $pkg ];
+	path=$(pkg_path $pkg)
+	if [ -d $path ];
 	then
-		git -C $pkg checkout -q "refs/releases/HEAD/$pkg"
+		git -C $path checkout -q "refs/releases/HEAD/$pkg"
 	else
-		git worktree add -q -f $pkg "refs/releases/HEAD/$pkg"
+		git worktree add -q -f $path "refs/releases/HEAD/$pkg"
 	fi
 }
 
@@ -107,10 +123,13 @@ orphanize() {
 	commit=`git rev-parse $src`
 	worktree_reset $name
 
-	git worktree add -q --no-checkout $name $src
+	path=$(pkg_path $name)
+	#git worktree add -q --no-checkout $name $src
+	git worktree add -q --no-checkout $path $src
 
-	git -C "$name" checkout -q -f --orphan "$name"
-	git -C "$name" commit -C $src -q \
+	git -C "$path" checkout -q -f --orphan "$name"
+	git -C "$path" commit -C $src -q \
+	  --trailer "git-pkgs-prefix:$prefix" \
 		--trailer "git-pkgs-name:$name" \
 		--trailer "git-pkgs-revision:$revision" \
 		--trailer "git-pkgs-commit:$commit" \
@@ -133,7 +152,8 @@ add_package() {
 		fi
   	git fetch -q . "$incoming:$target" --no-tags --force
 		worktree_reset $pkg
-		git worktree add -q -f $pkg $target
+		path=$(pkg_path $pkg)
+		git worktree add -q -f $path $target
 	fi
 }
 
@@ -186,10 +206,8 @@ resolve_transitive_dependency() {
 }
 
 cmd_add() {
-	if [ "$#" -eq 3 ]; then
-  	read -r name url revision <<< "$@"
-	elif [ "$#" -eq 2 ]; then
-		read -r name revision <<< "$@"
+	read -r name revision url <<< "$@"
+	if [ "$#" -eq 2 ]; then
 		url=$(get_trailer "refs/releases/HEAD/$name" git-pkgs-url)
 	fi
 
@@ -232,13 +250,15 @@ cmd_checkout() {
 	revision=$1
 	echo "Checkout revision $revision."
 	git checkout -q $revision
-	# N: rejected non-fast-forward.
-	git for-each-ref "refs/releases/HEAD"	--format="%(refname)" |
-		while read ref; do
-			pkg=${ref#"refs/releases/HEAD/"}
-			worktree_reset $pkg
-			git update-ref -d $ref
-		done
+
+	if [[ $revision != "HEAD" ]]; then
+		git for-each-ref "refs/releases/HEAD"	--format="%(refname)" |
+			while read ref; do
+				pkg=${ref#"refs/releases/HEAD/"}
+				worktree_reset $pkg
+				git update-ref -d $ref
+			done
+	fi
 
 	git fetch -q -p -f . "refs/releases/$revision/*:refs/releases/HEAD/*"
 
@@ -263,7 +283,8 @@ cmd_status() {
 
 # Push release and dependent packages to a remote.
 cmd_push() {
-	read -r remote revision <<< "$@"
+	remote=$1
+	revision=${2:-$(git describe --tags)}
 	git push -f $remote HEAD $revision "refs/releases/$revision/*" "refs/pkgs/*" "refs/releases/HEAD/*"
 }
 
@@ -343,10 +364,10 @@ package_tree() {
 # List packages that were added by "git pkgs add".
 get_root_packages() {
 	revision=$1
-	git for-each-ref "refs/releases/$revision/pkgs" |
+	git for-each-ref "refs/releases/$revision" |
 		while read commit type ref; do
 			pkg=${ref#"refs/releases/$revision/"}
-			if is_non_transitive $pkg; then
+			if is_non_transitive $pkg || [ $all ]; then
 				echo $commit
 			fi
 		done
@@ -391,7 +412,7 @@ resolve_removed() {
 # Remove a package.
 cmd_remove() {
   name=$1
-	# Only remove non-transitive packages?
+	# Only remove non-transitive packages.
 	if is_non_transitive $name; then
 		sha=`git rev-parse "refs/releases/HEAD/$name"` || die
 		revision=`get_trailer $sha "git-pkgs-revision"`
@@ -429,11 +450,12 @@ cmd_json-export() {
 	printf_json() {
 		output=`printf $@`; echo ${output/%,}
 	}
+
 	list_packages() {
 		git for-each-ref "refs/releases/$revision" \
 			--format="$(trailers git-pkgs-name git-pkgs-revision git-pkgs-commit git-pkgs-url)" |
 			while read name revision commit url; do
-				if is_non_transitive $name; then
+				if is_non_transitive $name || [ $all ]; then
 					printf_json "\"%s\":\"%s\"," name $name revision $revision commit $commit url $url
 				fi
 			done

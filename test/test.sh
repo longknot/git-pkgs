@@ -23,7 +23,7 @@ pkg_add() {
   b=$2
   rev=$3
   log_msg "Add $b@$rev to $a"
-  git -C $a pkgs add $b $PWD/$b $rev
+  git -C $a pkgs add $b $rev $PWD/$b
 }
 
 # Helper: initialize repo (update .gitignore!)
@@ -46,6 +46,8 @@ setup_repos() {
 
   log_msg "Add origin to foo"
   git -C foo remote add origin ../origin
+  # Let's use 'vendor' as a common prefix for packages (i.e. root folder).
+  git -C foo config pkgs.prefix vendor
 }
 
 # Add dependencies to the 'foo' repo. Clone into 'bar'.
