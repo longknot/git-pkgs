@@ -140,7 +140,6 @@ orphanize() {
 	worktree_reset $name
 
 	path=$(pkg_path $name)
-	#git worktree add -q --no-checkout $name $src
 	git worktree add -q --no-checkout $path $src
 
 	git -C "$path" checkout -q -f --orphan "$name"
@@ -179,7 +178,6 @@ resolve_transitive_dependency() {
 	target=$3
 
 	pkg=${target#"refs/releases/HEAD/"}
-	echo $pkg
 	# Avoid checking out self-references.
 	if [[ $pkg != $pkg_name ]]; then
 
@@ -233,11 +231,8 @@ cmd_add() {
 
 	# N: adding "--depth=1" will add the orphan branch to .git/shallow,
 	# even if the remote branch is already an orphan of depth 1.
-  git fetch -f --no-tags $url	\
+	git fetch -f --no-tags $url	\
 		"refs/releases/$revision/*:refs/pkgs/$name/$revision/*"
-
-	# Is there already an orphanized version of the package in the release?
-	# !!!! --> cyclic dependency e@1.1 in e@1.2-release?
 
 	ref="refs/pkgs/$name/$revision/$name"
 	if ! ref_exists $ref || [[ $revision != $(get_trailer $ref "git-pkgs-revision") ]]; then
@@ -283,8 +278,7 @@ cmd_release() {
 	if [[ $pkg_name && ! $skip_self  ]]; then
 		name=$pkg_name
 		# N: We can not use --depth=1 here. This will make the main branch grafted.
-		git fetch -q -f --no-tags . \
-			"$revision:refs/pkgs/$name/$revision/$name"
+		git fetch -q -f --no-tags . "$revision:refs/pkgs/$name/$revision/$name"
 		orphanize
 		git fetch -q -f . "refs/pkgs/$name/$revision/$name:refs/releases/$revision/$name"
 		# Remove worktree.
