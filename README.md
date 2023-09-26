@@ -99,7 +99,7 @@ git -C [repo] branch -M main       # useful for e.g. github
 ### Adding a dependency
 Dependencies are added through
 ```bash
-git pkgs add [-s <strategy>] <pkg> <revision> [<url>]
+git pkgs add [-s <strategy>] [-P <prefix>] <pkg> <revision> [<url>]
 ```
 with the following arguments and options:
 * `pkg` &mdash; unique package identifier and worktree prefix/path.
@@ -110,20 +110,20 @@ with the following arguments and options:
 ### Removing a dependency
 Dependencies are removed as follows:
 ```bash
-git pkgs remove <pkg>
+git pkgs remove [-P <prefix>] <pkg>
 ```
 > Once a package has been removed (along with its transitive dependencies), any removed dependency may still be substituted with transitive dependencies from other packages (this will repeat the dependency resolution process that happens when a package is added).
 
 ### Creating a new release
 A release records all the dependencies (and their transitive dependencies) into the git refs `refs/releases/[revision]/*`. This allows each release to be checked out again:
 ```bash
-git pkgs release <revision>
+git pkgs release [-m <message>] [--skip-self] <revision>
 ```
 
 ### Check out a specific release
 Checking out a release revision will restore all the dependencies into the state of the release in which they were recorded. We can think of this as a way to roll back dependencies to an earlier state.
 ```bash
-git pkgs checkout <revision>
+git pkgs checkout [-P <prefix>] <revision>
 ```
 
 ### Push to a remote repository
@@ -158,4 +158,4 @@ git pkgs json-import [<filename>]
 ```
 
 ## Acknowledgements
-Thanks to ChatGPT for providing valuable feedback. While not involved in the design per se, I very much appreciate some of the terminology used to describe this idea of mine (e.g. "decentralized dependency management").
+Thanks to ChatGPT for providing valuable feedback. While not involved in the design per se, I very much appreciate some of the terminology used to describe this idea of mine (e.g. "decentralized dependency manager").

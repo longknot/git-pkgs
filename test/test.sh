@@ -29,12 +29,12 @@ pkg_add() {
 # Helper: initialize repo (update .gitignore!)
 init_repo() {
   git init $1
+  git -C $1 config pkgs.name $1
   echo "pkgs" > $1/.gitignore
 }
 
 # Repositories used in test.
 setup_repos() {
-  init_repo foo
   init_repo pkgs/a
   init_repo pkgs/b
   init_repo pkgs/c
@@ -45,9 +45,14 @@ setup_repos() {
   git init origin --bare
 
   log_msg "Add origin to foo"
+
+  git init foo
   git -C foo remote add origin ../origin
+  git -C foo config pkgs.name "pkgs/foo"
   # Let's use 'vendor' as a common prefix for packages (i.e. root folder).
   git -C foo config pkgs.prefix vendor
+  echo "vendor" > foo/.gitignore
+  #git -C foo config pkgs.name "pkgs/foo"
 }
 
 # Add dependencies to the 'foo' repo. Clone into 'bar'.
@@ -89,6 +94,8 @@ basic_test() {
   pkg_add foo pkgs/a 1.2
   pkg_add foo pkgs/e 1.2
 
+  # exit
+
   pkg_release foo 1.2
   git -C foo pkgs tree
 
@@ -98,7 +105,7 @@ basic_test() {
   git -C foo pkgs push origin 1.2
 
   log_msg "Clone origin into bar."
-  git pkgs clone origin bar
+  git pkgs clone origin bar 1.2 --all --pkg-name="pkgs/foo"
 
   # Rollback to a previous release, e.g.:
   # git -C foo pkgs checkout 1.0

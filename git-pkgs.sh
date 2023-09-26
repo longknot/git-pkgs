@@ -9,12 +9,14 @@ if [ $# -eq 0 ]; then
 fi
 
 OPTS_SPEC="\
-git pkgs release [-m <message>] <revision>
-git pkgs add [-s <strategy>] <pkg> <revision> [<remote>]
-git pkgs remove <pkg>
-git pkgs checkout <revision>
+git pkgs release [-m <message>] [--skip-self] <revision>
+git pkgs add [-s <strategy>] [-P <prefix>] <pkg> <revision> [<remote>]
+git pkgs remove [-P <prefix>] <pkg>
+git pkgs checkout [-P <prefix>] <revision>
+git pkgs fetch [--all] <remote> [<revision>]
 git pkgs push <remote> [<revision>]
-git pkgs clone <remote> [<directory>]
+git pkgs pull <remote> [<revision>]
+git pkgs clone <remote> [<directory> [<revision>]]
 git pkgs ls-releases <pkg>
 git pkgs status [<revision>]
 git pkgs tree [<revision>]
@@ -27,14 +29,18 @@ P,prefix=     prefix
 m,message=    commit message
 s,strategy=   conflict resolution strategy ('max', 'min', 'keep', 'update', 'interactive')
 all           include all dependencies in an export (both direct and transitive).
+skip-self     do not include package itself in a release
+pkg-name=     package name (optional)
 "
 
 eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
 
+pkg_name=$(git config --get pkgs.name)
 prefix=$(git config --get pkgs.prefix)
 message=
 strategy=$(git config --default "max" --get pkgs.strategy)
 all=
+skip_self=
 
 while [ $# -gt 0 ]; do
 	opt="$1"
@@ -45,6 +51,8 @@ while [ $# -gt 0 ]; do
 		-m) message="$1"; shift;;
 		-s) strategy="$1"; shift;;
 		--all) all=1 ;;
+		--skip-self) skip_self=1 ;;
+		--pkg-name) pkg_name="$1"; shift;;
 		--) break ;;
 		*) die "Unexpected option: $opt" ;;
 	esac
@@ -74,6 +82,14 @@ max_revision() {
 
 get_trailer() {
 	git -P show -s --pretty="%(trailers:key=$2,valueonly)%-" $1
+}
+
+ref_exists() {
+	git show-ref -q $1
+}
+
+get_revision() {
+	git describe --tags
 }
 
 pkg_path() {
@@ -114,7 +130,7 @@ trailers() {
 	for key in $@; do
 		printf "key=$key,"
 	done
-	printf "valueonly,separator= )"
+	printf "valueonly,separator=|)"
 }
 
 # Make branch an orphan.
@@ -163,46 +179,50 @@ resolve_transitive_dependency() {
 	target=$3
 
 	pkg=${target#"refs/releases/HEAD/"}
+	echo $pkg
+	# Avoid checking out self-references.
+	if [[ $pkg != $pkg_name ]]; then
 
-	incoming=`git name-rev --name-only $b`
-	rev_a=""
-	rev_b=`get_trailer $b git-pkgs-revision`
+		incoming=`git name-rev --name-only $b`
+		rev_a=""
+		rev_b=`get_trailer $b git-pkgs-revision`
 
-	if git rev-parse -q --verify "$a^{commit}" > /dev/null; then
-		existing=`git name-rev --name-only $a`
-		rev_a=`get_trailer $a git-pkgs-revision`
+		if git rev-parse -q --verify "$a^{commit}" > /dev/null; then
+			existing=`git name-rev --name-only $a`
+			rev_a=`get_trailer $a git-pkgs-revision`
 
-		rev=$rev_a
-		case $strategy in
-			max)
-				rev=`max_revision $rev_a $rev_b`
-			;;
-			min)
-				rev=`min_revision $rev_a $rev_b`
-			;;
-			keep)
-				rev=$rev_a
-			;;
-			update)
-				rev=$rev_b
-			;;
-			interactive)
-	 			echo "Package $pkg already installed:"
-	 			echo " * [existing]        $existing ($rev_a)"
-	 			echo " * [incoming]        $incoming ($rev_b)"
-				echo "Replace existing with incoming? [y/N]"
-				read_char < /dev/tty
-	 			case $REPLY in
-	 			[Yy])
+			rev=$rev_a
+			case $strategy in
+				max)
+					rev=`max_revision $rev_a $rev_b`
+				;;
+				min)
+					rev=`min_revision $rev_a $rev_b`
+				;;
+				keep)
+					rev=$rev_a
+				;;
+				update)
 					rev=$rev_b
-					;;
-				esac
-			;;
-		esac
-	else
-		rev=$rev_b
+				;;
+				interactive)
+		 			echo "Package $pkg already installed:"
+		 			echo " * [existing]        $existing ($rev_a)"
+		 			echo " * [incoming]        $incoming ($rev_b)"
+					echo "Replace existing with incoming? [y/N]"
+					read_char < /dev/tty
+		 			case $REPLY in
+		 			[Yy])
+						rev=$rev_b
+						;;
+					esac
+				;;
+			esac
+		else
+			rev=$rev_b
+		fi
+		add_package
 	fi
-	add_package
 }
 
 cmd_add() {
@@ -216,14 +236,20 @@ cmd_add() {
   git fetch -f --no-tags $url	\
 		"refs/releases/$revision/*:refs/pkgs/$name/$revision/*"
 
-	# N: the target ref (i.e. the package itself), may already exist, if there is
-	# a cyclic dependency. We assume that the specified revision will void this
-	# dependency, since a cyclic dependency can only require an earlier revision.
-	git fetch -f --depth=1 --no-tags $url \
-		"$revision:refs/pkgs/$name/$revision/$name" || die
+	# Is there already an orphanized version of the package in the release?
+	# !!!! --> cyclic dependency e@1.1 in e@1.2-release?
 
-	# Make shallow branch an orphan.
-	orphanize
+	ref="refs/pkgs/$name/$revision/$name"
+	if ! ref_exists $ref || [[ $revision != $(get_trailer $ref "git-pkgs-revision") ]]; then
+		# N: the target ref (i.e. the package itself), may already exist, if there is
+		# a cyclic dependency. We assume that the specified revision will void this
+		# dependency, since a cyclic dependency can only require an earlier revision.
+		git fetch -f --depth=1 --no-tags $url \
+			"$revision:refs/pkgs/$name/$revision/$name" || die
+
+		# Make shallow branch an orphan.
+		orphanize
+	fi
 
 	echo "From $url"
 	echo " * [new package]     $name@$revision"
@@ -232,6 +258,7 @@ cmd_add() {
 	echo "Depencies resolved:"
 	git fetch . "refs/pkgs/$name/$revision/*:refs/releases/HEAD/*" --no-tags --porcelain | \
 		while read status a b target; do
+			echo $target
 			resolve_transitive_dependency $a $b $target
 		done
 }
@@ -239,10 +266,32 @@ cmd_add() {
 # Create a new release (tag) of this package.
 cmd_release() {
 	revision=$1
+	[ $revision ] || die "fatal: Revision/tag was not specified."
+
+	if [[ ! $pkg_name && ! $skip_self ]]; then
+		echo 'fatal: package does not have a name.'
+		echo 'Configure a package name like this:'
+		echo "'git config pkgs.name <name>'"
+		die
+	fi
+
 	git add .
-	git commit -q --message="$message" --trailer "git-pkgs-release:$revision"
+	git commit -q --message="$message"
 	git tag $revision
 	git fetch -q . "refs/releases/HEAD/*:refs/releases/$revision/*"
+
+	if [[ $pkg_name && ! $skip_self  ]]; then
+		name=$pkg_name
+		# N: We can not use --depth=1 here. This will make the main branch grafted.
+		git fetch -q -f --no-tags . \
+			"$revision:refs/pkgs/$name/$revision/$name"
+		orphanize
+		git fetch -q -f . "refs/pkgs/$name/$revision/$name:refs/releases/$revision/$name"
+		# Remove worktree.
+		worktree_reset $name
+	else
+		echo "warning: package itself was not included as an orphaned ref in the release."
+	fi
 }
 
 # Checkout a specific release (including dependencies).
@@ -284,21 +333,39 @@ cmd_status() {
 # Push release and dependent packages to a remote.
 cmd_push() {
 	remote=$1
-	revision=${2:-$(git describe --tags)}
+	[ $remote ] || die "fatal: No remote was provided. Where do you want to push?"
+	revision=${2:-$(get_revision)}
 	git push -f $remote HEAD $revision "refs/releases/$revision/*" "refs/pkgs/*" "refs/releases/HEAD/*"
+}
+
+cmd_fetch() {
+	origin=$1
+	revision=$2
+	if [ $all ]; then
+		git fetch $origin $revision "refs/releases/*:refs/releases/*" "refs/pkgs/*:refs/pkgs/*" "refs/tags/*:refs/tags/*"
+	else
+		if [ $revision ]; then
+			git fetch $origin $revision "refs/releases/$revision/*:refs/releases/$revision/*"
+		fi
+	fi
+}
+
+cmd_pull() {
+	read -r remote revision <<< "$@"
+	cmd_fetch $remote $revision || die
+	cmd_checkout $revision
 }
 
 # Clone a release and check out its packages.
 cmd_clone() {
-	read -r url dst <<< "$@"
-	git clone $url $dst
+	read -r url dst revision <<< "$@"
+	git clone $url $dst || die
 
-	git -C $dst config --add remote.origin.fetch "+refs/releases/*:refs/releases/*"
-	git -C $dst config --add remote.origin.fetch "+refs/pkgs/*:refs/pkgs/*"
-	git -C $dst config --add remote.origin.fetch "+refs/tags/*:refs/tags/*"
+	revision=${revision:-HEAD}
 
-	git -C $dst fetch origin
-	git -C $dst pkgs checkout HEAD
+	cd $dst \
+		&& cmd_fetch origin $revision \
+		&& cmd_checkout $revision
 }
 
 format_tree() {
@@ -412,6 +479,7 @@ resolve_removed() {
 # Remove a package.
 cmd_remove() {
   name=$1
+	[ $name ] || die "fatal: No package name was given. What should be removed?"
 	# Only remove non-transitive packages.
 	if is_non_transitive $name; then
 		sha=`git rev-parse "refs/releases/HEAD/$name"` || die
@@ -438,6 +506,7 @@ cmd_remove() {
 # Import from json (requires jq).
 cmd_json-import() {
 	filename=$1
+	[ $filename ] || die "fatal: No filename was given. What should be imported?"
 	jq -r '.packages[] | "\(.name) \(.revision) \(.url)"' $filename |
 		while read name revision url; do
 			git pkgs add $name $url $revision
@@ -453,17 +522,19 @@ cmd_json-export() {
 
 	list_packages() {
 		git for-each-ref "refs/releases/$revision" \
-			--format="$(trailers git-pkgs-name git-pkgs-revision git-pkgs-commit git-pkgs-url)" |
-			while read name revision commit url; do
+			--format="%(authorname)|%(authoremail)|%(contents:subject)|$(trailers git-pkgs-name git-pkgs-revision git-pkgs-commit git-pkgs-url)" |
+			while IFS="|" read author email subject name revision commit url; do
 				if is_non_transitive $name || [ $all ]; then
-					printf_json "\"%s\":\"%s\"," name $name revision $revision commit $commit url $url
+					IFS="|"
+					printf_json '"%s":"%s",' "name|$name|revision|$revision|commit|$commit|url|$url|author|$author|email|$email|description|$subject"
 				fi
 			done
 	}
 
 	revision=${1:-HEAD}
-	packages=$(printf_json "{%s}," $(list_packages))
-	echo "{\"packages\":[$packages]}"
+
+	IFS=$'\n' && packages=$(printf_json "{%s}," $(list_packages))
+	echo "{\"name\":\"$pkg_name\",\"revision\":\"$(get_revision)\",\"packages\":[$packages]}"
 }
 
 # All commands but "clone" require a work tree.
