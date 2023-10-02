@@ -30,6 +30,7 @@ pkg_add() {
 init_repo() {
   git init $1
   git -C $1 config pkgs.name $1
+  git -C $1 config pkgs.url "$PWD/$1"
   echo "pkgs" > $1/.gitignore
 }
 
@@ -47,7 +48,7 @@ setup_repos() {
   log_msg "Add origin to foo"
 
   git init foo
-  git -C foo remote add origin ../origin
+  git -C foo remote add origin "$PWD/origin"
   git -C foo config pkgs.name "pkgs/foo"
   # Let's use 'vendor' as a common prefix for packages (i.e. root folder).
   git -C foo config pkgs.prefix vendor

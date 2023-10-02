@@ -37,6 +37,7 @@ d,depth=      recursion depth
 eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
 
 pkg_name=$(git config --get pkgs.name)
+pkg_url=$(git config --get pkgs.url)
 prefix=$(git config --get pkgs.prefix)
 message=
 strategy=$(git config --default "max" --get pkgs.strategy)
@@ -103,11 +104,20 @@ pkg_path() {
 	echo $path
 }
 
+# List packages that were added by "git pkgs add".
+get_root_packages() {
+	pkg=$1
+	revision=$2
+	git for-each-ref "refs/pkgs/$pkg/$revision" |
+		while read commit type ref; do
+			echo $commit
+		done
+}
+
+# Remove existing worktree.
 worktree_reset() {
-	# remove worktree if it already exists.
 	path=$(pkg_path $1)
-	if [ -d "$path" ]
-	then
+	if [ -d "$path" ]; then
     git worktree remove -f "$path"
 		git worktree prune
 	fi
@@ -116,8 +126,7 @@ worktree_reset() {
 # If pkg exists, use "git checkout", otherwise "git worktree add".
 worktree_checkout() {
 	path=$(pkg_path $pkg)
-	if [ -d $path ];
-	then
+	if [ -d $path ]; then
 		git -C $path checkout -q "refs/pkgs/$pkg_name/HEAD/$pkg"
 	else
 		git worktree add -q -f $path "refs/pkgs/$pkg_name/HEAD/$pkg"
@@ -294,7 +303,9 @@ cmd_release() {
 
 	# N: We can not use --depth=1 here. This will make the main branch grafted.
 	git fetch -q -f --no-tags . "$revision:refs/pkgs/$name/$revision/$name"
-	url=$(git remote get-url origin) 2> /dev/null
+	url=${pkg_url:-$(git remote get-url origin 2> /dev/null)}
+	[[ $url ]] || echo "warning: could not determine repository url."
+
 	orphanize
 	git fetch -q -f . "refs/pkgs/$name/$revision/$name:refs/pkgs/$name/HEAD/$name"
 	# Remove worktree.
@@ -335,7 +346,9 @@ cmd_checkout() {
 
 # List all (remote) release tags of a package.
 cmd_ls-releases() {
-	url=$(get_trailer "refs/pkgs/$pkg_name/HEAD/$1" git-pkgs-url)
+	pkg=$1
+	[[ $pkg ]] || die "fatal: required argument <pkg> missing."
+	url=$(get_trailer "refs/pkgs/$pkg_name/HEAD/$pkg" git-pkgs-url)
 	git ls-remote --refs --tags $url
 }
 
@@ -440,49 +453,39 @@ format_pkg() {
 
 package_tree() {
 	local release=$2
-	local depth=$3
+	local revision=$3
+	local depth=$4
 
 	local pkg=`get_trailer $commit git-pkgs-name`
-  local revision=`get_trailer $commit git-pkgs-revision`
 
 	if [[ ! $1 =~ ":$pkg" ]] && [[ $depth != 0 ]]; then
 
 		echo -e "$1:$(format_pkg $pkg $revision)"
 
-		git for-each-ref "refs/pkgs/$pkg/$revision" |
-  		while read commit type ref; do
-  			package_tree "$1:$pkg@$revision" $release $(($depth-1))
+		git for-each-ref "refs/pkgs/$pkg/$revision" --format="%(objectname) $(trailers git-pkgs-revision)" |
+  		while read commit revision; do
+  			package_tree "$1:$pkg@$revision" $release $revision $(($depth-1))
   		done
   fi
 }
 
-# List packages that were added by "git pkgs add".
-get_root_packages() {
-	revision=$1
-	git for-each-ref "refs/pkgs/$pkg/$revision" |
-		while read commit type ref; do
-			echo $commit
-		done
-}
-
 release_tree() {
 	release=$1
-	get_root_packages $release |
+	get_root_packages $pkg_name $release |
 		while read commit; do
-			package_tree "" $release $depth
+			revision=`get_trailer $commit git-pkgs-revision`
+			package_tree "" $release $revision $depth
 		done
 }
 
 cmd_tree() {
-	release=${1:-"HEAD"}
-	commit=$(get_commit "refs/pkgs/$pkg_name/$release/$pkg_name")
-	revision=$(get_trailer $commit "git-pkgs-revision")
-	pkg=$pkg_name
+	revision=${1:-"HEAD"}
+	commit=$(get_commit "refs/pkgs/$pkg_name/$revision/$pkg_name")
 
 	if [[ $all ]]; then
-		release_tree $release | format_tree
+		release_tree $revision | format_tree
 	else
-		package_tree "" $release $depth | format_tree
+		package_tree "" $revision $revision $depth | format_tree
 	fi
 }
 
@@ -495,17 +498,37 @@ cmd_prune() {
 # Resolve removed into existing.
 resolve_removed() {
 	removed=$1
-	echo " * [remove]          $removed@$pkg_rev"
+	pkg_rev=$2
 	target="refs/pkgs/$pkg_name/HEAD/$removed"
-	get_root_packages HEAD |
+	get_root_packages $pkg_name HEAD |
 		while read sha; do
 			root=`get_trailer $sha git-pkgs-name`
-			revision=`get_trailer $sha git-pkgs-revision`
-			git for-each-ref "refs/pkgs/$root/$revision/$removed" |
-				while read new type ref; do
-					old=`git rev-parse $target 2> /dev/null`
-					resolve_transitive_dependency $old $new $target
-				done
+
+			if [[ $root != $pkg_name ]]; then
+				revision=`get_trailer $sha git-pkgs-revision`
+				git for-each-ref "refs/pkgs/$root/$revision/$removed" |
+					while read new type ref; do
+						old=`git rev-parse $target 2> /dev/null`
+						resolve_transitive_dependency $old $new $target
+					done
+			fi
+		done
+}
+
+remove_packages() {
+	name=$1
+	revision=$2
+	git for-each-ref "refs/pkgs/$name/$revision" |
+		while read commit type ref; do
+			pkg=${ref#"refs/pkgs/$name/$revision/"}
+			pkg_rev=`get_trailer $commit git-pkgs-revision`
+			# Only remove if part of HEAD.
+			if git name-rev --no-undefined --refs="refs/pkgs/$pkg_name/HEAD/$pkg" $ref &> /dev/null; then
+				worktree_reset $pkg
+				# Delete package from HEAD.
+				git update-ref -d "refs/pkgs/$pkg_name/HEAD/$pkg" &> /dev/null
+				echo "$pkg $pkg_rev"
+			fi
 		done
 }
 
@@ -515,34 +538,31 @@ cmd_remove() {
 	[ $name ] || die "fatal: No package name was given. What should be removed?"
 	# Only remove non-transitive packages.
 	if is_non_transitive $name; then
-		sha=`git rev-parse "refs/pkgs/$pkg_name/HEAD/$name"` || die
+		sha=`git rev-parse "refs/pkgs/$pkg_name/HEAD/$name"` || die "fatal: Could not extract commit."
 		revision=`get_trailer $sha "git-pkgs-revision"`
 		echo "Removing $name@$revision"
 		echo "Depencies resolved:"
 		# Process transitory dependencies
-		git for-each-ref "refs/pkgs/$name/$revision" |
-			while read commit type ref; do
-				pkg=${ref#"refs/pkgs/$name/$revision/"}
-				pkg_rev=`get_trailer $commit git-pkgs-revision`
-
-				# Only remove if part of HEAD.
-				if git name-rev --no-undefined --refs="refs/pkgs/$pkg_name/HEAD/$pkg" $ref &> /dev/null; then
-					worktree_reset $pkg
-					# Delete package from HEAD.
-					git update-ref -d "refs/pkgs/$pkg_name/HEAD/$pkg" &> /dev/null
-					resolve_removed $pkg
-				fi
+		items=$(remove_packages $name $revision)
+		echo "$items" |
+			while read removed pkg_rev; do
+				echo " * [remove]          $removed@$pkg_rev"
 			done
+		echo "$items" |
+			while read removed pkg_rev; do
+				resolve_removed $removed $pkg_rev
+			done
+	else
+		die "fatal: Package is not a direct dependency."
 	fi
 }
 
 # Import from json (requires jq).
 cmd_json-import() {
-	filename=$1
-	[ $filename ] || die "fatal: No filename was given. What should be imported?"
+	filename=${1:-/dev/stdin}
 	jq -r '.packages[] | "\(.name) \(.revision) \(.url)"' $filename |
 		while read name revision url; do
-			git pkgs add $name $url $revision
+			git pkgs add $name $revision $url
 		done
 }
 
