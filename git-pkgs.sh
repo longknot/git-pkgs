@@ -8,8 +8,11 @@ if [ $# -eq 0 ]; then
   set -- -h
 fi
 
+PKGS_DEFAULT_TYPE=${PKGS_DEFAULT_TYPE:-"pkg"}
+PKGS_DEFAULT_STRATEGY=${PKGS_DEFAULT_STRATEGY:-"max"}
+
 OPTS_SPEC="\
-git pkgs release [-m <message>] [--skip-self] <revision>
+git pkgs release [-m <message>] <revision>
 git pkgs add [-s <strategy>] [-P <prefix>] <pkg> <revision> [<remote>]
 git pkgs remove [-P <prefix>] <pkg>
 git pkgs checkout [-P <prefix>] <revision>
@@ -19,7 +22,8 @@ git pkgs pull <remote> [<revision>]
 git pkgs clone <remote> [<directory> [<revision>]]
 git pkgs ls-releases <pkg>
 git pkgs status [<revision>]
-git pkgs tree [-d <depth> [--all] [<revision>]
+git pkgs tree [-d <depth>] [--all] [<revision>]
+git pkgs show <pkg>
 git pkgs json-import [<filename>]
 git pkgs json-export [--all] [<revision>]
 --
@@ -29,8 +33,9 @@ P,prefix=     prefix
 m,message=    commit message
 s,strategy=   conflict resolution strategy ('max', 'min', 'keep', 'update', 'interactive')
 all           include all dependencies in an export (both direct and transitive).
-skip-self     do not include package itself in a release
 pkg-name=     package name (optional)
+pkg-type=     package type (optional)
+pkg-url=      package url (optional)
 d,depth=      recursion depth
 "
 
@@ -38,9 +43,11 @@ eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
 
 pkg_name=$(git config --get pkgs.name)
 pkg_url=$(git config --get pkgs.url)
-prefix=$(git config --get pkgs.prefix)
+pkg_url=${pkg_url:-$(git config --get remote.origin.url)}
+pkg_type=$(git config --default "$PKGS_DEFAULT_TYPE" --get pkgs.type)
+prefix=$(git config --default "$PKGS_DEFAULT_PREFIX" --get pkgs.prefix)
+strategy=$(git config --default "$PKGS_DEFAULT_STRATEGY" --get pkgs.strategy)
 message=
-strategy=$(git config --default "max" --get pkgs.strategy)
 all=
 depth=-1
 
@@ -55,6 +62,8 @@ while [ $# -gt 0 ]; do
 		-d) depth="$1"; shift;;
 		--all) all=1 ;;
 		--pkg-name) pkg_name="$1"; shift;;
+		--pkg-url) pkg_url="$1"; shift;;
+		--pkg-type) pkg_type="$1"; shift;;
 		--) break ;;
 		*) die "Unexpected option: $opt" ;;
 	esac
@@ -167,8 +176,8 @@ orphanize() {
 
 	git -C "$path" checkout -q -f --orphan "$name"
 	git -C "$path" -c trailer.ifexists=addIfDifferent commit -C $src -q \
-	  --trailer "git-pkgs-prefix:$prefix" \
 		--trailer "git-pkgs-name:$name" \
+		--trailer "git-pkgs-type:$pkg_type" \
 		--trailer "git-pkgs-revision:$revision" \
 		--trailer "git-pkgs-commit:$commit" \
 		--trailer "git-pkgs-url:$url"
@@ -296,6 +305,7 @@ cmd_release() {
 	git add .
 	git -c trailer.ifexists=addIfDifferent commit -q --allow-empty --message="$message" \
 		--trailer "git-pkgs-name:$name" \
+		--trailer "git-pkgs-type:$pkg_type" \
 		--trailer "git-pkgs-revision:$revision"
 
 	git tag $revision
@@ -303,7 +313,8 @@ cmd_release() {
 
 	# N: We can not use --depth=1 here. This will make the main branch grafted.
 	git fetch -q -f --no-tags . "$revision:refs/pkgs/$name/$revision/$name"
-	url=${pkg_url:-$(git remote get-url origin 2> /dev/null)}
+
+	url=$pkg_url
 	[[ $url ]] || echo "warning: could not determine repository url."
 
 	orphanize
@@ -576,11 +587,11 @@ cmd_json-export() {
 
 	list_packages() {
 		git for-each-ref "refs/pkgs/$pkg_name/$revision" \
-			--format="%(authorname)|%(authoremail)|%(contents:subject)|$(trailers git-pkgs-name git-pkgs-revision git-pkgs-commit git-pkgs-url)" |
-			while IFS="|" read author email subject name revision commit url; do
+			--format="%(authorname)|%(authoremail)|%(contents:subject)|%(objectname)|$(trailers git-pkgs-name git-pkgs-revision git-pkgs-commit git-pkgs-url)" |
+			while IFS="|" read author email subject objname name revision commit url; do
 				if is_non_transitive $name || [ $all ]; then
 					IFS="|"
-					printf_json '"%s":"%s",' "name|$name|revision|$revision|commit|$commit|url|$url|author|$author|email|$email|description|$subject"
+					printf_json '"%s":"%s",' "name|$name|revision|$revision|author|$author|email|$email|description|$subject|snapshot|$objname|reference|$commit|url|$url|mirror|$pkg_url|"
 				fi
 			done
 	}
@@ -590,6 +601,52 @@ cmd_json-export() {
 	IFS=$'\n' && packages=$(printf_json "{%s}," $(list_packages))
 	echo "{\"name\":\"$pkg_name\",\"revision\":\"$(get_revision)\",\"packages\":[$packages]}"
 }
+
+get_revisions() {
+	pkg=$1
+	git ls-remote . "refs/pkgs/$pkg/*/$pkg" |
+		while read commit ref; do
+			rev=${ref#"refs/pkgs/$pkg/"}
+			rev=${rev%"/$pkg"}
+			if [[ $rev == $revision || $rev == 'HEAD' ]]; then
+				echo -e "\e[1;37m$rev\e[0;37m"
+			else
+				echo $rev
+			fi
+		done
+}
+
+cmd_show() {
+	pkg=$1
+	[[ $pkg ]] || die "fatal: no package name provided."
+
+	data=$(git for-each-ref "refs/pkgs/$pkg_name/HEAD/$pkg" --format="%(authorname)|%(authoremail)|%(authordate:short)|%(contents:subject)|%(objectname)|$(trailers git-pkgs-name git-pkgs-type git-pkgs-revision git-pkgs-commit git-pkgs-url)")
+	[[ $data ]] || die "fatal: package '$pkg' not found."
+
+	IFS="|" read author email authordate subject objname name type revision commit url <<< $data
+
+	revs=$(printf "%s, " $(get_revisions $pkg | sort -V -r))
+	revs=${revs/%, }
+
+	echo -e "\e[0;36mname       : \e[0;37m$pkg"
+	echo -e "\e[0;36mversions   : \e[0;37m$revs"
+	echo -e "\e[0;36mdecription : \e[0;37m$subject"
+	echo -e "\e[0;36mtype       : \e[0;37m$type"
+	echo -e "\e[0;36mauthor     : \e[0;37m$author $email"
+	echo -e "\e[0;36mdate       : \e[0;37m$authordate"
+	echo -e "\e[0;36mpath       : \e[0;37m$prefix/$pkg"
+	echo -e "\e[0;36msnapshot   : \e[0;37m$objname"
+	echo -e "\e[0;36mreference  : \e[0;37m$commit"
+	echo -e "\e[0;36mrepository : \e[0;37m$url"
+	echo ""
+	echo -e "\e[0;36mdependencies (direct & indirect):"
+  git for-each-ref "refs/pkgs/$pkg/$revision/" --format="$(trailers git-pkgs-name git-pkgs-revision)" |
+		while IFS="|" read name rev; do
+			[[ $name != $pkg ]] && echo -e "\e[0;37m- $name \e[1;39m$rev\e[0m"
+		done
+
+}
+
 
 # All commands but "clone" require a work tree.
 [[ $command != "clone" ]] && . git-sh-setup && require_work_tree
