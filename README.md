@@ -2,12 +2,11 @@
 
 > The decentralized package manager for git
 
-> [!WARNING]
-> This software is still in early development &mdash; use at your own risk!
-
 <p align="center">
   <img src="docs/img/git-pkgs.svg" />
 </p>
+
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/longknot/git-pkgs)
 
 Decentralized package management has long been the holy grail... No, not quite. In fact decentralized package managers have acquired quite a bad reputation.
 
