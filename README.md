@@ -33,7 +33,7 @@
 ## Quick start
 ```bash
 # Install (anywhere on PATH)
-cp git-pkgs.sh /usr/local/bin
+cp git-pkgs.sh /usr/local/bin/git-pkgs
 
 # Verify availability
 git pkgs --help
