@@ -32,8 +32,8 @@
 
 ## Quick start
 ```bash
-# Install (anywhere on PATH)
-cp git-pkgs.sh /usr/local/bin/git-pkgs
+# Install git-pkgs
+sudo ./install.sh
 
 # Verify availability
 git pkgs --help
