@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/bin/bash
 #
 # git-pkgs.sh: the decentralized package manager for git.
 #
@@ -8,6 +8,7 @@ if [ $# -eq 0 ]; then
   set -- -h
 fi
 
+MIN_GIT_VERSION="2.41"
 PKGS_DEFAULT_TYPE=${PKGS_DEFAULT_TYPE:-"pkg"}
 PKGS_DEFAULT_STRATEGY=${PKGS_DEFAULT_STRATEGY:-"max"}
 
@@ -238,11 +239,22 @@ done
 command="$1"
 shift
 
+# Check git version requirements.
+require_git_version() {
+	(echo min version $MIN_GIT_VERSION; git --version) | sort -Vk3 | tail -1 | grep -q git \
+	  || die "git-pkgs requires git version $MIN_GIT_VERSION"
+}
+
 # Read char function that works with both bash and zsh.
 read_char() {
   stty -icanon -echo
   REPLY=$(dd bs=1 count=1 2>/dev/null)
   stty icanon echo
+}
+
+die() {
+    printf '%s\n' "$1" >&2
+    exit "${2-1}"
 }
 
 sort_revisions() {
@@ -1081,7 +1093,7 @@ cmd_show() {
 }
 
 
-# All commands but "clone" require a work tree.
-[[ $command != "clone" && $command != "mcp" ]] && . git-sh-setup && require_work_tree
+# All commands but "clone" and "mcp" require a work tree.
+[[ $command != "clone" && $command != "mcp" ]] && require_git_version && . git-sh-setup && require_work_tree
 
 "cmd_$command" "$@"
