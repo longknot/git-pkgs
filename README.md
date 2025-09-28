@@ -36,7 +36,7 @@
 sudo ./install.sh
 
 # Verify availability
-git pkgs --help
+git pkgs -h
 
 # Initialize a project repo
 mkdir demo && cd demo
