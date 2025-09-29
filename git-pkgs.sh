@@ -36,6 +36,7 @@ m,message=    commit message
 s,strategy=   conflict resolution strategy ('max', 'min', 'keep', 'update', 'interactive')
 all           include all dependencies in an export (both direct and transitive).
 pkg-name=     package name (optional)
+pkg-revision= package revision (optional)
 pkg-type=     package type (optional)
 pkg-url=      package url (optional)
 d,depth=      recursion depth
@@ -209,6 +210,7 @@ MCP_COMMAND_METADATA='
 eval "$(echo "$OPTS_SPEC" | git rev-parse --parseopt -- "$@" || echo exit $?)"
 
 pkg_name=$(git config --get pkgs.name)
+pkg_revision=HEAD
 pkg_url=$(git config --get pkgs.url)
 pkg_url=${pkg_url:-$(git config --get remote.origin.url)}
 pkg_type=$(git config --default "$PKGS_DEFAULT_TYPE" --get pkgs.type)
@@ -229,6 +231,7 @@ while [ $# -gt 0 ]; do
 		-d) depth="$1"; shift;;
 		--all) all=1 ;;
 		--pkg-name) pkg_name="$1"; shift;;
+		--pkg-revision) pkg_revision="$1"; shift;;
 		--pkg-url) pkg_url="$1"; shift;;
 		--pkg-type) pkg_type="$1"; shift;;
 		--) break ;;
@@ -464,7 +467,7 @@ cmd_add() {
 
 	# select referenced packages into refs/release/head
 	echo "Depencies resolved:"
-	git fetch . "refs/pkgs/$name/$revision/*:refs/pkgs/$pkg_name/HEAD/*" --no-tags --porcelain | \
+	git fetch . "refs/pkgs/$name/$revision/*:refs/pkgs/$pkg_name/$pkg_revision/*" --no-tags --porcelain | \
 		while read status a b target; do
 			resolve_transitive_dependency $a $b $target
 		done
@@ -487,7 +490,7 @@ cmd_release() {
 		--trailer "git-pkgs-revision:$revision"
 
 	git tag $revision
-	git fetch -q . "refs/pkgs/$pkg_name/HEAD/*:refs/pkgs/$name/$revision/*"
+	git fetch -q . "refs/pkgs/$pkg_name/$pkg_revision/*:refs/pkgs/$name/$revision/*"
 
 	# N: We can not use --depth=1 here. This will make the main branch grafted.
 	git fetch -q -f --no-tags . "$revision:refs/pkgs/$name/$revision/$name"
@@ -537,14 +540,14 @@ cmd_checkout() {
 cmd_ls-releases() {
 	pkg=$1
 	[[ $pkg ]] || die "fatal: required argument <pkg> missing."
-	url=$(get_trailer "refs/pkgs/$pkg_name/HEAD/$pkg" git-pkgs-url)
+	url=$(get_trailer "refs/pkgs/$pkg_name/$pkg_revision/$pkg" git-pkgs-url)
 	git ls-remote --refs --tags $url
 }
 
 # Get status (commit/revision) of all packages.
 cmd_status() {
 	fmt="%(objectname)    %(contents:trailers:key=git-pkgs-name,key=git-pkgs-revision,valueonly,separator=@)"
-	git for-each-ref --format="$fmt" "refs/pkgs/$pkg_name/HEAD"
+	git for-each-ref --format="$fmt" "refs/pkgs/$pkg_name/$pkg_revision"
 }
 
 # Push release and dependent packages to a remote.
@@ -979,10 +982,10 @@ remove_packages() {
 			pkg=${ref#"refs/pkgs/$name/$revision/"}
 			pkg_rev=`get_trailer $commit git-pkgs-revision`
 			# Only remove if part of HEAD.
-			if git name-rev --no-undefined --refs="refs/pkgs/$pkg_name/HEAD/$pkg" $ref &> /dev/null; then
+			if git name-rev --no-undefined --refs="refs/pkgs/$pkg_name/$pkg_revision/$pkg" $ref &> /dev/null; then
 				worktree_reset $pkg
 				# Delete package from HEAD.
-				git update-ref -d "refs/pkgs/$pkg_name/HEAD/$pkg" &> /dev/null
+				git update-ref -d "refs/pkgs/$pkg_name/$pkg_revision/$pkg" &> /dev/null
 				echo "$pkg $pkg_rev"
 			fi
 		done
@@ -994,7 +997,7 @@ cmd_remove() {
 	[ $name ] || die "fatal: No package name was given. What should be removed?"
 	# Only remove non-transitive packages.
 	if is_non_transitive $name; then
-		sha=`git rev-parse "refs/pkgs/$pkg_name/HEAD/$name"` || die "fatal: Could not extract commit."
+		sha=`git rev-parse "refs/pkgs/$pkg_name/$pkg_revision/$name"` || die "fatal: Could not extract commit."
 		revision=`get_trailer $sha "git-pkgs-revision"`
 		echo "Removing $name@$revision"
 		echo "Depencies resolved:"
