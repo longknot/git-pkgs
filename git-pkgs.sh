@@ -390,7 +390,8 @@ resolve_transitive_dependency() {
 	b=$2
 	target=$3
 
-	pkg=${target#"refs/pkgs/$pkg_name/HEAD/"}
+	pkg=${target#"refs/pkgs/$pkg_name/$pkg_revision/"}
+
 	# Avoid checking out self-references.
 	if [[ $pkg != $pkg_name ]]; then
 
@@ -489,7 +490,7 @@ cmd_release() {
 		--trailer "git-pkgs-type:$pkg_type" \
 		--trailer "git-pkgs-revision:$revision"
 
-	git tag $revision
+	git tag -f $revision
 	git fetch -q . "refs/pkgs/$pkg_name/$pkg_revision/*:refs/pkgs/$name/$revision/*"
 
 	# N: We can not use --depth=1 here. This will make the main branch grafted.
