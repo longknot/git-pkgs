@@ -1,140 +1,178 @@
-# git-pkgs — the git-native, serverless package manager
+# git-pkgs — the git-native package manager
+
+`git-pkgs` lets any git repository double as a fully self-hosted package registry. Every release, dependency edge, and provenance record is stored under `refs/pkgs/` using stock git data structures—no daemons, lockfiles, or central services required. The latest refactor moves all package metadata into JSON (`pkgs.json`) files that travel with each package, making dependency graphs explicit, reviewable, and easy to automate.
 
 <p align="center">
   <img src="docs/img/git-pkgs.svg" />
 </p>
 
-`git-pkgs` lets any git repository double as its own package registry. Every release, dependency, and provenance record is tracked with stock git features—no central service, daemon, or database required. The result is a *git-native* and genuinely *serverless* dependency workflow that stays portable, auditable, and reproducible across teams.
+## Why people reach for git-pkgs
+- **Registry-free, serverless distribution** – Mirroring the repo copies every dependency because the registry _is_ the repo.
+- **Deterministic releases** – `git pkgs release` snapshots the full dependency tree (direct + transitive) into refs you can audit forever.
+- **JSON-first configuration** – `pkgs.json` replaces scattered git config keys with a single document per package. It records metadata, dependency revisions, path mappings, and conflict strategy.
+- **Safe vendoring via worktrees** – Dependencies live under a configurable prefix (default `pkgs/`) and are checked out as worktrees, so the main branch stays clean.
+- **Language agnostic + MCP ready** – Any git content can become a package, and `git pkgs mcp` exposes the same operations over stdio for tool automation.
 
-## Why git-pkgs?
-- **Self-hosted without servers** — Dependencies live under `refs/pkgs/` inside the same repo; mirroring your repository also preserves its package history.
-- **One repository, many packages** — Orphan branches and worktrees keep package sources alongside your project while isolating their histories.
-- **Deterministic releases** — `git pkgs release` records the exact tree of direct and transitive dependencies, so future checkouts reproduce the same stack.
-- **Security & provenance** — Dependencies are pulled from trusted remotes once, then frozen inside your repo, protecting you from disappearing registries or tampered tags.
-- **Language-agnostic** — Works equally well for Go, Python, Rust, firmware blobs, or even custom build artifacts because everything is just git objects.
+## How git-pkgs models a package
 
-## Core concepts
-- **Releases** — A release is a git tag that has an accompanying `refs/pkgs/<name>/<tag>/` namespace. That namespace stores the full dependency graph for that snapshot, plus metadata trailers (name, type, source URL, revision).
-- **Dependencies** — Added via `git pkgs add`, each dependency is fetched once, committed as an orphan branch, and referenced through logs that retain its upstream origin.
-- **Worktrees** — Packages appear in a configurable prefix (default `pkgs/`). They are checked out via git worktrees, so the main project history stays untouched.
-- **Conflict strategies** — When two packages request different revisions of the same dependency, strategies like `max`, `keep`, `update`, `min`, and `interactive` decide how to reconcile them.
+| Concept | Description |
+| --- | --- |
+| **Release refs** | Every package `name` and `revision` pair gets a namespace `refs/pkgs/<name>/<revision>/`. `refs/pkgs/<name>/HEAD/` keeps track of the active graph. |
+| **`pkgs.json`** | Lives next to your sources. It captures author metadata, default prefix, conflict strategy, and a sorted map of dependencies. `git pkgs add` and `git pkgs release` update it for you. |
+| **Worktrees** | Dependencies are checked out into `<prefix>/<package>` (or a custom location from `.paths`). Removing a package just deletes the worktree and ref. |
+| **Conflict strategies** | When multiple parents request different revisions of the same package you can pick `max`, `min`, `keep`, `update`, or `interactive`. Defaults can be set per package via `pkgs.json`. |
 
-## Compared to language-specific package managers
-| Topic | Typical language manager | `git-pkgs` |
-| ----- | ------------------------ | ---------- |
-| Registry | Central service (npm, crates.io) | None. Uses any git remote or local path |
-| Availability | Registry downtime blocks installs | As long as you can run git, you can fetch dependencies |
-| Scope | Tied to one language/runtime | Works with anything representable in git |
-| Provenance | Trusts published tarballs | Trusts git commits that you audit and freeze |
-| Vendoring | Often requires extra tooling | Built-in via orphan branches and worktrees |
-| Air-gapped builds | Requires mirrors or proxies | `git clone` your repo; dependencies are already there |
-| Automation | Language-specific CLIs or APIs | Pure git + optional JSON-RPC (`git pkgs mcp`) |
+### `pkgs.json` at a glance
 
-## Quick start
-```bash
-# Install git-pkgs
-sudo ./install.sh
-
-# Verify availability
-git pkgs -h
-
-# Initialize a project repo
-mkdir demo && cd demo
-git init
-
-echo "pkgs" > .gitignore          # keep worktrees out of the main branch
-git config pkgs.name demo         # required: identifies this package set
-
-# Optional defaults
-git config pkgs.prefix pkgs       # where worktrees for deps will live
-git config pkgs.strategy max      # conflict resolution policy
-
-# Add a dependency from a remote repo
-git pkgs add github.com/example/lib v1.2.3 https://github.com/example/lib
-
-# Record a release of the current project + deps
-git commit -am "Initial commit"
-git tag v1.0.0
-git pkgs release -m "demo v1.0.0" v1.0.0
-
-# Rehydrate later (anywhere you can run git)
-git pkgs checkout v1.0.0
+```json
+{
+  "name": "demo-app",
+  "description": "Example service packaged with git-pkgs",
+  "version": "1.0.0",
+  "prefix": "pkgs",
+  "strategy": "max",
+  "url": "git@github.com:acme/demo-app.git",
+  "dependencies": {
+    "core-lib": "v2.1.4",
+    "dev:internal-tooling": "HEAD"
+  },
+  "paths": {
+    "core-lib:*": "pkgs",
+    "dev:internal-tooling": "tools"
+  },
+  "scripts": {
+    "postcheckout": "./scripts/sync-generated.sh"
+  }
+}
 ```
 
-Because dependencies live in orphan branches and are accessed through worktrees, the main project history remains linear and clean. You can still use your normal branching model, pull requests, and review workflows while benefiting from embedded dependencies.
+- **Top-level metadata** (`name`, `version`, `description`, `url`, `type`, etc.) describes the package and is stored as git trailers when you cut releases.
+- **`dependencies`** is a map from `<namespace>:<package>` (namespace optional) to a revision/tag. Entries are added automatically when you run `git pkgs add`.
+- **`paths`** maps namespace patterns to filesystem prefixes. When a package ref matches `<namespace>/<pattern>`, it is checked out into `prefix/<stripped-package-name>`. If omitted, everything lands in `<prefix>/<name>`.
+- **`strategy`, `prefix`, `author(s)`, `files`, `config`, `extra`, `scripts`** are optional fields recognised by `PKGS_KEYS` inside `git-pkgs.sh`. Unknown keys are ignored.
 
-## Configuration surface
-- `pkgs.name` *(required)* — Logical package name used to namespace refs (often the repo name).
-- `pkgs.prefix` *(optional)* — Filesystem prefix where dependency worktrees are checked out (`pkgs/` by convention).
-- `pkgs.url` *(optional)* — Repository URL recorded in release metadata; defaults to `remote.origin.url`.
-- `pkgs.type` *(optional)* — Free-form type label stored with releases. Defaults to `${PKGS_DEFAULT_TYPE:-pkg}`.
-- `pkgs.strategy` *(optional)* — Default conflict strategy (`max`, `min`, `keep`, `update`, `interactive`). Defaults to `${PKGS_DEFAULT_STRATEGY:-max}`.
-- Environment overrides — `PKGS_DEFAULT_TYPE`, `PKGS_DEFAULT_STRATEGY`, and `PKGS_DEFAULT_PREFIX` let you set fallbacks before running the command.
+Use the built-in config helpers to edit the file without wrangling JSON by hand:
+
+```bash
+git pkgs config add name demo-app
+git pkgs config add prefix pkgs
+git pkgs config add strategy max
+git pkgs config list        # prints the normalized JSON
+git pkgs config get name    # echoes "demo-app"
+```
+
+Pass `--config <path>` to target a different `pkgs.json` and `--pkg-name/--pkg-revision/--pkg-type/--pkg-url` to override metadata while operating on another package (handy when acting as a registry or doing migrations).
+
+## Quick start with the JSON workflow
+
+```bash
+# Install once per workstation
+sudo ./install.sh
+
+# Create a new repository and describe it via pkgs.json
+mkdir demo && cd demo && git init
+git pkgs config add name demo-app
+git pkgs config add prefix pkgs
+git pkgs config add strategy max
+echo "pkgs" >> .gitignore            # keep worktrees out of commits
+
+# Add your code, commit it, then bring in a dependency
+git pkgs add libfoo v1.2.3 https://github.com/example/libfoo
+# pkgs.json is updated; the dependency is checked out under pkgs/libfoo
+
+# Cut a release that freezes the full graph
+git commit -am "Initial code"
+git tag v1.0.0
+git pkgs release -m "demo-app v1.0.0" v1.0.0
+
+# Rehydrate later (locally or on another machine)
+git pkgs checkout v1.0.0
+git pkgs tree
+```
+
+`pkgs.json` is versioned like any other file. Reviewers can diff dependency changes, and automation can parse the JSON directly.
 
 ## Command reference
-Each command is implemented in `git-pkgs.sh`; the highlights below reflect its behavior.
 
-- `git pkgs add [-s <strategy>] [-P <prefix>] <pkg> <revision> [<remote>]`
-  - Fetches dependency refs from the remote, converts the requested revision into an orphan branch, and pulls referenced packages into `refs/pkgs/<pkg_name>/HEAD/`. If `<remote>` is omitted, the last recorded source URL is reused.
-  - Prints `[add]`, `[update]`, or `[keep]` decisions for each dependency. `--strategy` controls conflict handling.
-- `git pkgs remove [-P <prefix>] <pkg>`
-  - Only removes direct dependencies (those not required transitively). Cleans the worktree, deletes the HEAD ref, and attempts to resolve downstream packages by reusing other roots.
+- `git pkgs add [-s <strategy>] [-P <prefix>] [-n <namespace>] <pkg> <revision> [<remote>]`
+  Fetches `<pkg>` from `<remote>` (or the stored URL), orphans the requested revision, records it inside `pkgs.json`, then resolves transitive dependencies into `refs/pkgs/<pkg_name>/HEAD/…`. Namespaced adds (e.g. `-n dev`) store dependencies as `dev:<pkg>`.
+- `git pkgs add-dir [-n <namespace>] <pkg> <revision> <path>`
+  Imports a local directory as a package without running `git init` inside it. Uses a throwaway index, writes trailers, records the dependency in `pkgs.json`, and attaches it to the current graph (useful for Go module cache or npm installs you don't want to mutate).
+- `git pkgs remove <pkg>`
+  Removes a direct dependency from `HEAD`, deletes the worktree, and reconciles any transitive packages that are no longer needed.
 - `git pkgs release [-m <message>] <revision>`
-  - Commits trailers describing the release, tags the repository, snapshots all current dependencies into `refs/pkgs/<name>/<revision>/`, and re-orphanizes the package branch.
-- `git pkgs checkout [-P <prefix>] <revision>`
-  - Checks out the project tag and re-creates the dependency worktrees (removing any stale ones). Works with any recorded release or `HEAD`.
-- `git pkgs fetch [--all] <remote> [<revision>]`
-  - Imports release metadata and tags from another repo. With `--all` it mirrors every package ref; otherwise supply a `<revision>` to fetch that specific release.
-- `git pkgs push <remote> [<revision>]`
-  - Forces a push of the current branch, the given revision tag (defaults to latest tag by `git describe`), and all `refs/pkgs/*` namespaces.
-- `git pkgs pull <remote> [<revision>]`
-  - Convenience wrapper that fetches metadata from the remote and immediately runs `git pkgs checkout`.
-- `git pkgs clone <remote> [<directory> [<revision>]]`
-  - Clones a repository, configures `pkgs.name` from the release metadata, fetches dependency refs, and checks them out locally.
-- `git pkgs ls-releases <pkg>`
-  - Lists tags for a dependency package by querying the stored source URL.
-- `git pkgs status [<revision>]`
-  - Shows `commit` and `name@revision` for each dependency currently referenced in HEAD (the optional revision argument is reserved for future extensions).
-- `git pkgs tree [-d <depth>] [--all] [<revision>]`
-  - Produces an ASCII dependency tree with glyphs and colors (✓ for locked nodes, • for transitive branches). `--all` walks every release root; otherwise it focuses on the selected package. Depth defaults to unlimited.
-- `git pkgs show <pkg>`
-  - Presents colorized metadata (versions, authorship, source URL) and lists both direct and indirect dependencies for a package.
-- `git pkgs json-export [--all] [<revision>]`
-  - Emits a JSON manifest containing the project name, revision, and dependency metadata (including source URL and commit). `--all` includes transitive dependencies.
-- `git pkgs json-import [<filename>]`
-  - Reads a manifest (or stdin) and replays `git pkgs add` for each entry, effectively re-hydrating a dependency set from JSON. Requires `jq`.
-- `git pkgs prune`
-  - Runs `git gc` with aggressive settings to clean up unreachable objects created by orphan branches.
-- `git pkgs mcp`
-  - Starts a JSON-RPC transport that exposes git-pkgs commands as structured tools. Useful for editor integrations, automation runtimes, or AI assistants.
+  Writes the current dependency graph into `refs/pkgs/<name>/<revision>/`, updates `pkgs.json.version`, and tags/commits the release.
+- `git pkgs checkout <revision>`
+  Swaps every dependency worktree to the version recorded in `refs/pkgs/<name>/<revision>/`. Passing `HEAD` restores the working release.
+- `git pkgs fetch|pull|push|clone`
+  Interact with remotes while keeping `refs/pkgs/` synchronized. `pull` = fetch + checkout; `clone <remote> <dir> [<revision>]` bootstraps a repo plus dependencies in one go.
+- `git pkgs ls-releases <pkg>`  
+  Lists the remote tags that package has published.
+- `git pkgs status`  
+  Dumps `<commit>    <name>@<revision>` for every ref currently in the graph.
+- `git pkgs tree [<revision>]`  
+  Pretty-prints the dependency DAG. Colors highlight whether a package is reused verbatim or deduped.
+- `git pkgs show <pkg>`  
+  Shows metadata, authorship, refs, and the transitive dependency list for a single package.
+- `git pkgs json-export [--all] [<revision>]` / `git pkgs json-import [<file>]`  
+  Share dependency manifests across repos or automation. `--all` exports transitive deps, not just the roots.
+- `git pkgs config <list|get|add> …`  
+  Scriptable interface for editing `pkgs.json`.
+- `git pkgs prune`  
+  (Advanced) Garbage-collect grafted commits that are no longer reachable.
+- `git pkgs mcp`  
+  Starts the stdio MCP server so bots or IDEs can drive the same commands programmatically.
 
-> Tip: all commands (except `clone` and `mcp`) require a working tree and leverage `git-sh-setup` for consistent error handling.
+Environment variables such as `PKGS_DEFAULT_PREFIX`, `PKGS_DEFAULT_TYPE`, and `PKGS_DEFAULT_STRATEGY` let you seed defaults before invoking commands. The minimum supported git version is 2.41 because git worktree + trailer behaviors rely on it.
 
-## Migration guide: adopting a git-pkgs workflow
-1. **Pick a package prefix.** Decide where dependencies should live (e.g. `pkgs/`). Add that directory to `.gitignore` so checkout worktrees do not pollute your main tree.
-2. **Configure package identity.** Set `git config pkgs.name <your-name>` and optional defaults (`pkgs.prefix`, `pkgs.strategy`) before importing dependencies.
-3. **Import existing dependencies.** For each direct dependency, run `git pkgs add`. Target specific tags, commits, or branches; transitive dependencies resolve automatically.
-4. **Capture the baseline.** Tag your project and run `git pkgs release <tag>`. This writes dependency metadata into `refs/pkgs/<name>/<tag>/` without touching your working tree.
-5. **Clean up legacy vendoring.** Remove manual vendored copies or lockfiles you no longer need; the dependency state now lives in git itself.
-6. **Educate contributors.** Share the new commands (`add`, `remove`, `tree`, `checkout`, `status`) and the conflict strategy you prefer. Contributors need nothing beyond git and the `git-pkgs` script.
-7. **Integrate into CI.** Replace package install steps with `git pkgs checkout <revision>` after cloning the repo. Builds now depend only on git availability.
+## Custom layouts, namespaces, and overrides
 
-## Advanced usage patterns
-- **Mirror mode** — Use `git pkgs push` so collaborators and CI servers receive dependency refs alongside code.
-- **Offline bootstrap** — Combine `git pkgs clone` with intra-company Git servers to provision air-gapped machines.
-- **Audit trails** — `git pkgs show` and `git pkgs status` give precise provenance for each dependency, including author and upstream revision.
-- **Bulk updates** — With the `update` strategy or by re-running `git pkgs add` at a new revision, you can coordinate dependency upgrades in a controlled, reviewable fashion.
-- **Machine integrations** — The `mcp` command provides structured command metadata, enabling IDEs, bots, or policy engines to call git-pkgs declaratively.
+- **Paths & prefixes** – Keep multiple dependency groups separated by adding entries under `paths`. A key is either `<namespace>:<pattern>` or `<pattern>`; the value is the filesystem prefix. When a ref under `refs/pkgs/<pkg_name>/HEAD/<namespace>/<pkg>` matches the pattern, the package is checked out under `<prefix>/<trimmed-name>`. Set `"prefix": "false"` when you only need refs and do not want worktrees.
+- **Namespace field** – `git pkgs add -n dev foo HEAD` records the dependency as `dev:foo` and expects a matching path pattern when checking out. Namespaces help separate dev/test graphs from production releases without duplicating packages.
+- **Overriding metadata** – `--pkg-name`, `--pkg-revision`, `--pkg-type`, and `--pkg-url` allow acting on another package’s refs without switching branches. `npm2pkgs.sh` (below) uses these flags to inject dependencies while building up historical releases.
 
-## Thinking ahead: potential of git-native dependencies
-- **Resilience** — Every clone becomes a full mirror of your dependency universe. No single registry outage can halt builds.
-- **Composable repos** — Teams can share modular components simply by granting git access. Any repository can be a package repository without extra infrastructure.
-- **Policy enforcement** — Because releases are pure git data, you can sign tags, run policy checks, or enforce review gates before `git pkgs release` is allowed.
-- **Long-term archival** — Archiving your repository (e.g. to object storage) preserves complete dependency provenance for future rebuilds and audits.
+## Modeling dev-only dependencies
+
+Use namespaces to keep development or test tooling out of production layouts while still recording their provenance inside `pkgs.json`.
+
+1. **Record the dependency under a namespace**
+   ```bash
+   git pkgs add -n dev tooling-kit HEAD https://github.com/acme/tooling-kit
+   ```
+   This writes `"dev:tooling-kit": "HEAD"` to `pkgs.json.dependencies`. Release refs still carry the full graph, so you can reproduce local dev environments later.
+
+2. **Map the namespace to a dedicated path**
+   ```json
+   {
+     "paths": {
+       "dev:*": "dev_pkgs",
+       "*": "pkgs"
+     }
+   }
+   ```
+   The first rule sends every `dev:*` package to `dev_pkgs/<name>`, while other dependencies continue to land in `pkgs/<name>`. Patterns can be as specific as needed (`"dev:lint-*": "tools/lint"`).
+
+3. **Gate keep dev packages in releases if desired**
+   - For production builds, leave the `dev_pkgs/` directory untracked or ignored (e.g. separate `.gitignore` entry).
+   - When cutting a release that should exclude dev tooling entirely, remove the namespace entries from `pkgs.json` before `git pkgs release`—they will no longer be materialized in the target refs.
+
+Because namespaces are first-class in refs (`refs/pkgs/<pkg_name>/HEAD/dev/tooling-kit`), you can always re-checkout or vendor dev dependencies later, yet your runtime workspace stays clean thanks to the `paths` routing.
+
+## Migration helpers (npm, Go, Python, Rust)
+
+Scripts under `migrate/` help import existing projects into git-pkgs:
+
+- Node.js (npm): `migrate/nodejs/npm2pkgs.sh` (+ demo `migrate/nodejs/demo.sh`) reads `npm ls --json` and populates `pkgs.json`.
+- Go (modules): `migrate/golang/go2pkgs.sh` (+ demo) parses `go list -m -json all` and can filter to the vendor graph via `--vendor-only`. The script uses the `add-dir` command so transitive refs are resolved into the root graph.
+- Python: `migrate/python/pip2pkgs.sh` (requirements.txt) and `migrate/python/poetry2pkgs.sh` (poetry.lock) with demos (`pipdemo.sh`, `poetrydemo.sh`). They create a venv, install deps, synthesize per-package `pkgs.json`, and attach the full tree under the root.
+- Rust: `migrate/rust/cargo2pkgs.sh` (+ demo) uses `cargo metadata` to mirror the Cargo dependency graph.
+
+After running the demo scripts you can inspect `DEST/pkgs.json`, run `git pkgs tree`, and start publishing the imported packages just like any native git-pkgs project.
 
 ## Further resources
-- `docs/` — Additional diagrams, examples, and CLI reference material.
-- `docs/mcp.md` — Configuring mcp clients to use git-pkgs.
-- `test/test.sh` — End-to-end demo that sets up nested repos to show how `git-pkgs` resolves dependency trees.
 
-`git-pkgs` shows what happens when package management fully embraces git: a single tool, one distributed source of truth, and dependency management that is as portable as a bare repository.
+- `docs/mcp.md` – How to speak to the MCP server.
+- `migrate/registry.md` – Notes on treating git-pkgs as a general-purpose registry and examples of `--pkg-name` overrides.
+- `test/` – Contains end-to-end exercises that showcase nested dependency graphs.
+
+`git-pkgs` embraces git as the single source of truth for releases and dependencies. With JSON config committed next to your code, reviewers and automation can see exactly which packages are in play, why they were pulled, and how to reproduce the build forever.
